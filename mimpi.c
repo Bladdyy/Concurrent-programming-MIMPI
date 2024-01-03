@@ -28,16 +28,32 @@ void MIMPI_Finalize() {
     // Sprawdza, czy proces jest w bloku MIMPI.
     if (initalized != NULL && atoi(initalized) == 1) {
         int rank = MIMPI_World_rank();
+        int size = MIMPI_World_size();
         // Wysyła do pozostałych procesów wiadomość, że zakończył swój blok MIMPI.
-        int *data = malloc(sizeof(int) * MIMPI_World_size());  // Tablica procesów w bloku MIMPI.
-        ASSERT_SYS_OK(chrecv(20, data, sizeof(int) * MIMPI_World_size()));
+        int *data = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
+        ASSERT_SYS_OK(chrecv(20, data, sizeof(int) * (size + 1)));
         data[rank] = 0;  // Zaznacza w tablicy, że zakończył swój blok MIMPI.
-        ASSERT_SYS_OK(chsend(21, data, sizeof(int) * MIMPI_World_size()));
-        for (int i = 0; i < MIMPI_World_size(); i++){
+        data[size] = data[size] - 1; // Zaznacza w tablicy, że proces mniej jest w bloku;
+        ASSERT_SYS_OK(chsend(21, data, sizeof(int) * (size + 1)));
+        free(data);
+        for (int i = 0; i < size; i++){
             if (i != rank) {
                 MIMPI_Send(NULL, 0, i, -1);
             }
         }
+
+        int* group = malloc(sizeof(int) * 2);  // Tablica do synchronizacji grupowej.
+        ASSERT_SYS_OK(chrecv(22, group, sizeof(int) * 2));
+        if (group[1] != 0){  // Jeśli przeprowadzana jest którakolwiek z synchronizacji.
+            int msg = 3;
+            for (int i = 0; i < size; i++){  // Budzenie wszystkich procesów z błędem.
+                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
+            }
+        }
+        ASSERT_SYS_OK(chsend(23, group, sizeof(int) * 2));
+        free(group);
+
+
         char val[4];
         sprintf(val, "%d", -1);
         setenv("ENTERED", val, 1);  // Odbiera dostęp do funkcji MIMPI.
@@ -92,7 +108,7 @@ MIMPI_Retcode MIMPI_Send(
         return 2;
     } else if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
         // Numer deskryptora, do którego zapisywana będzie wiadomość.
-        int dir = 23 + MIMPI_World_size() * 4 + destination * 2 + MIMPI_World_rank() * (MIMPI_World_size() - 1) * 2;
+        int dir = 25 + MIMPI_World_size() * 4 + destination * 2 + MIMPI_World_rank() * (MIMPI_World_size() - 1) * 2;
         // Jeśli rank odbiorcy jest większy od rank nadawcy.
         if (destination > MIMPI_World_rank()) {
             dir -= 2;
@@ -103,9 +119,10 @@ MIMPI_Retcode MIMPI_Send(
             return 0;
         }
         else{
-            int *in = malloc(sizeof(int) * MIMPI_World_size());  // Tablica procesów w bloku MIMPI.
-            ASSERT_SYS_OK(chrecv(20, in, sizeof(int) * MIMPI_World_size()));
-            ASSERT_SYS_OK(chsend(21, in, sizeof(int) * MIMPI_World_size()));
+            int size = MIMPI_World_size();
+            int *in = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
+            ASSERT_SYS_OK(chrecv(20, in, sizeof(int) * (size + 1)));
+            ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (size + 1)));
             if (in[destination] == 0) {  // Jeśli procesu już nie ma w bloku MIMPI.
                 return 3;
             }
@@ -138,7 +155,9 @@ MIMPI_Retcode MIMPI_Recv(
     }
     else if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
         // Numer deskryptora, z którego będzie czytana wiadomość.
-        int dir = 22 + MIMPI_World_size() * 4 + MIMPI_World_rank() * 2 + source * (MIMPI_World_size() - 1) * 2;
+        int size = MIMPI_World_size();
+        int rank = MIMPI_World_rank();
+        int dir = 24 + size * 4 + rank * 2 + source * (size - 1) * 2;
         // Jeśli rank odbiorcy jest większy od rank nadawcy.
         if (source < MIMPI_World_rank()) {
             dir -= 2;
@@ -159,7 +178,60 @@ MIMPI_Retcode MIMPI_Recv(
 }
 
 MIMPI_Retcode MIMPI_Barrier() {
-    TODO
+    char *initalized = getenv("ENTERED");
+    if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
+        int size = MIMPI_World_size();
+        int rank = MIMPI_World_rank();
+
+        int *in = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
+        ASSERT_SYS_OK(chrecv(20, in, sizeof(int) * (size + 1)));
+        ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (size + 1)));
+        if (in[size] < size){  // Jeśli któryś z procesów już wyszedł z bloku MIMPI.
+            int msg = 3;
+            for (int i = 0; i < size; i++){  // Wszystkie czekające procesy dowiadują się, iż synchronizacja się nie powiodła.
+                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
+            }
+        }
+        free(in);
+
+        int* group = malloc(sizeof(int) * 2);  // Tablica do synchronizacji grupowej.
+        ASSERT_SYS_OK(chrecv(22, group, sizeof(int) * 2));
+        int mode = group[1];
+        group[1] = 1;  // Tryb oznaczający synchronizajcę na barierze.
+        group[0] = group[0] + 1;
+        int number = group[0];  // Liczba procesów oczekujących na barierze;
+        if (group[0] == size){  // Ostatni proces do zsynchronizowania.
+            group[0] = 0;
+            group[1] = 0;
+        }
+        ASSERT_SYS_OK(chsend(23, group, sizeof(int) * 2));
+        free(group);
+
+        if (mode > 1){  // Jeśli procesy synchronizują się na czymś innym, niż bariera.
+            int msg = 3;
+            for (int i = 0; i < size; i++){  // Wszystkie czekające procesy dowiadują się, iż synchronizacja się nie powiodła.
+                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
+            }
+        }
+
+        else if (number == size){  // Synchronizacja powiodła się.
+            int msg = 1;
+            for (int i = 0; i < size; i++){  // Budzenie procesów.
+                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
+            }
+        }
+        int got;  // Odczytywana wiadomość.
+        void* buff = malloc(sizeof(int));
+        ASSERT_SYS_OK(chrecv(24 + rank * 2, buff, sizeof(int)));
+        memcpy(&got, buff, sizeof(int));
+        if (got == 1){  // Jeśli wszyscy, na których oczekiwano dotarli.
+            return 0;
+        }
+        else{
+            return 3;
+        }
+    }
+    return 0;
 }
 
 MIMPI_Retcode MIMPI_Bcast(

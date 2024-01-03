@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     }
 
     // Otwieranie dobrych deskryptorów do komunikacji między składowymi MIMPI oraz procesami.
-    for (int i = 0; i < n * (n + 1) + 1; i++) {
+    for (int i = 0; i < n * (n + 1) + 2; i++) {
         ASSERT_ZERO(channel(pipefd));
     }
 
@@ -52,12 +52,19 @@ int main(int argc, char** argv) {
     }
 
     // Tablica procesów, które wyszły z MIMPI.
-    int* in = malloc(sizeof(int) * n);
+    int* in = malloc(sizeof(int) * (n + 1));
     for (int i = 0; i < n; i++){
         in[i] = 1;
     }
+    in[n] = n;
     // Umieszcza tablicę procesów w pierwszym pipie.
-    ASSERT_SYS_OK(chsend(21, in, sizeof(int) * n));
+    ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (n + 1)));
+
+    // Umieszcza tablicę do funkcji grupowych w drugim pipie.
+    int* barrier = malloc(sizeof(int) * 2);
+    barrier[0] = 0;
+    barrier[1] = 0;
+    ASSERT_SYS_OK(chsend(23, barrier, sizeof(int) * 2));
 
     // Inicjalizacja nowych procesów.
     for (int i = 0; i < n; i++){
@@ -85,7 +92,7 @@ int main(int argc, char** argv) {
         ASSERT_SYS_OK(wait(NULL));
     }
     // Zamykanie otwartych deskryptorów.
-    for (int i = 0; i < 2 * (n * (n + 1) + 1); i++){
+    for (int i = 0; i < 2 * (n * (n + 1) + 2); i++){
         ASSERT_ZERO(close(i + 20));
     }
 }
