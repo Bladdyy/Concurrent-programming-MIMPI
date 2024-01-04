@@ -193,10 +193,10 @@ MIMPI_Retcode MIMPI_Barrier() {
         }
         free(in);
 
-        int* group = malloc(sizeof(int));  // Tablica do synchronizacji grupowej.
+        int* group = malloc(sizeof(int));  // Ile procesów czeka już na barierze.
         ASSERT_SYS_OK(chrecv(22, group, sizeof(int)));
         *group = *group + 1;
-        int number = *group;  // Liczba procesów oczekujących na barierze;
+        int number = *group;  // Liczba procesów oczekujących na barierze włącznie z nowym;
         if (*group == size){  // Ostatni proces do zsynchronizowania.
             *group = 0;
         }
@@ -215,7 +215,7 @@ MIMPI_Retcode MIMPI_Barrier() {
         memcpy(&code, buff, sizeof(int));
         return code;
     }
-    return 0;
+    return -5;  // Proces nie jest w bloku MIMPI.
 }
 
 MIMPI_Retcode MIMPI_Bcast(
@@ -223,7 +223,25 @@ MIMPI_Retcode MIMPI_Bcast(
     int count,
     int root
 ) {
-    TODO
+    int code = MIMPI_Barrier();
+    if (code == 0){
+        int rank = MIMPI_World_rank();
+        int size = MIMPI_World_size();
+        if (root == rank){
+            for (int i = 0; i < size; i++){
+                if (i != rank){
+                    ASSERT_SYS_OK(chsend(25 + 2 * i, data, count));
+                }
+            }
+        }
+        else{
+            ASSERT_SYS_OK(chrecv(24 + rank * 2, data, count));
+        }
+        return 0;
+    }
+    else{
+        return 3;
+    }
 }
 
 MIMPI_Retcode MIMPI_Reduce(
