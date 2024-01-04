@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include "channel.h"
 #include "mimpi.h"
 #include "mimpi_common.h"
@@ -23,24 +24,43 @@ void MIMPI_Init(bool enable_deadlock_detection) {
     }
 }
 
+
 void MIMPI_Finalize() {
     char* initalized = getenv("ENTERED");
     // Sprawdza, czy proces jest w bloku MIMPI.
     if (initalized != NULL && atoi(initalized) == 1) {
         int rank = MIMPI_World_rank();
         int size = MIMPI_World_size();
-        // Wysyła do pozostałych procesów wiadomość, że zakończył swój blok MIMPI.
         int *data = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
         ASSERT_SYS_OK(chrecv(20, data, sizeof(int) * (size + 1)));
         data[rank] = 0;  // Zaznacza w tablicy, że zakończył swój blok MIMPI.
         data[size] = data[size] - 1; // Zaznacza w tablicy, że proces mniej jest w bloku;
         ASSERT_SYS_OK(chsend(21, data, sizeof(int) * (size + 1)));
         free(data);
+
+        // Wysyła do pozostałych procesów wiadomość, że zakończył swój blok MIMPI.
         for (int i = 0; i < size; i++){
             if (i != rank) {
                 MIMPI_Send(NULL, 0, i, -1);
             }
         }
+
+        int dir = 25 + size * 4 + (size - 1) * 2 * rank;
+        for (int i = 0; i < size - 1; i++){  // Zamyka swoje deskryptory do wysyłania.
+            ASSERT_ZERO(close(dir + i * 2));
+
+        }
+        for (int i = 0; i < size; i++){  // Zamyka swoje deskryptory do odczytu.
+            if (i != rank){
+                int dir = 24 + size * 4 + rank * 2 + i * (size - 1) * 2;
+                // Jeśli rank odbiorcy jest większy od rank nadawcy.
+                if (rank > i) {
+                    dir -= 2;
+                }
+                ASSERT_ZERO(close(dir));
+            }
+        }
+
 
         int* group = malloc(sizeof(int));  // Tablica do synchronizacji grupowej.
         ASSERT_SYS_OK(chrecv(22, group, sizeof(int)));
@@ -50,8 +70,14 @@ void MIMPI_Finalize() {
                 ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
             }
         }
+
         ASSERT_SYS_OK(chsend(23, group, sizeof(int)));
         free(group);
+
+        // Closing the rest of descriptors.
+        for (int i = 20; i <= 23 + size * 4; i++){
+            ASSERT_ZERO(close(i));
+        }
 
         char val[4];
         sprintf(val, "%d", -1);
@@ -213,6 +239,8 @@ MIMPI_Retcode MIMPI_Barrier() {
         void* buff = malloc(sizeof(int));
         ASSERT_SYS_OK(chrecv(24 + rank * 2, buff, sizeof(int)));
         memcpy(&code, buff, sizeof(int));
+        printf("%d  MA COOOOOOOOOOOOOOODE: %d\n", rank, code);
+
         return code;
     }
     return -5;  // Proces nie jest w bloku MIMPI.
@@ -240,6 +268,7 @@ MIMPI_Retcode MIMPI_Bcast(
         return 0;
     }
     else{
+        printf("TEN BALDA %d\n", MIMPI_World_rank());
         return 3;
     }
 }

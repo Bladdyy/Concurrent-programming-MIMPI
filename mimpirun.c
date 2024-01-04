@@ -10,6 +10,35 @@
 #include <unistd.h>
 #include <stdio.h>
 
+// Zamyka niepotrzebne dekryptory.
+void close_desc(int num, int size){
+    int dir;
+    for (int i = 0; i < size; i++){
+        if (i != num){
+            dir = 25 + size * 4 + (size - 1) * 2 * i;
+            // Zamyka wszystkie deskryptory do wpisywania innych procesów.
+            for (int j = 0; j < size - 1; j++){
+                ASSERT_ZERO(close(dir + 2 * j));
+            }
+        }
+        dir = 24 + size * 4 + (size - 1) * 2 * i;
+        int dodge;  // Deskryptory aktualnego procesu do czytania,
+        if (i == num){
+            dodge = -5;
+        }
+        else{
+            dodge = 24 + size * 4 + num * 2 + i * (size - 1) * 2;
+            if (i < num){
+                dodge -= 2;
+            }
+        }
+        for (int y = 0; y < size - 1; y++){  // Zamyka deskryptory do czytania innych procesów.
+            if (dir + y * 2 != dodge){
+                ASSERT_ZERO(close(dir + y * 2));
+            }
+        }
+    }
+}
 int main(int argc, char** argv) {
     if (argc < 3){  // Program dostał mniej, niż 2 argumenty.
         return -1;
@@ -69,7 +98,9 @@ int main(int argc, char** argv) {
     for (int i = 0; i < n; i++){
         pid_t pid = fork();
         ASSERT_SYS_OK(pid);
+
         if (!pid){
+            close_desc(i, n);  // Zamyka deskryptory niepotrzebne temu dziecku.
             char val[64];
             sprintf(val, "%d", i);
             // Zmienna środowiskowa informująca o rank procesu.
@@ -90,8 +121,10 @@ int main(int argc, char** argv) {
     for (int i = 0; i < n; i++) {
         ASSERT_SYS_OK(wait(NULL));
     }
+
     // Zamykanie otwartych deskryptorów.
     for (int i = 0; i < 2 * (n * (n + 1) + 2); i++){
         ASSERT_ZERO(close(i + 20));
     }
+
 }
