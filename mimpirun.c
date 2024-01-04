@@ -59,13 +59,12 @@ int main(int argc, char** argv) {
     in[n] = n;
     // Umieszcza tablicę procesów w pierwszym pipie.
     ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (n + 1)));
-
-    // Umieszcza tablicę do funkcji grupowych w drugim pipie.
-    int* barrier = malloc(sizeof(int) * 2);
-    barrier[0] = 0;
-    barrier[1] = 0;
-    ASSERT_SYS_OK(chsend(23, barrier, sizeof(int) * 2));
-
+    free(in);
+    // Umieszcza liczbę określającą ilość procesów w procedurze grupowej w drugim pipie.
+    int* barrier = malloc(sizeof(int));
+    *barrier = 0;
+    ASSERT_SYS_OK(chsend(23, barrier, sizeof(int)));
+    free(barrier);
     // Inicjalizacja nowych procesów.
     for (int i = 0; i < n; i++){
         pid_t pid = fork();

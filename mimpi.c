@@ -42,17 +42,16 @@ void MIMPI_Finalize() {
             }
         }
 
-        int* group = malloc(sizeof(int) * 2);  // Tablica do synchronizacji grupowej.
-        ASSERT_SYS_OK(chrecv(22, group, sizeof(int) * 2));
-        if (group[1] != 0){  // Jeśli przeprowadzana jest którakolwiek z synchronizacji.
+        int* group = malloc(sizeof(int));  // Tablica do synchronizacji grupowej.
+        ASSERT_SYS_OK(chrecv(22, group, sizeof(int)));
+        if (*group > 0){  // Jeśli przeprowadzana jest synchronizacja grupowa.
             int msg = 3;
             for (int i = 0; i < size; i++){  // Budzenie wszystkich procesów z błędem.
                 ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
             }
         }
-        ASSERT_SYS_OK(chsend(23, group, sizeof(int) * 2));
+        ASSERT_SYS_OK(chsend(23, group, sizeof(int)));
         free(group);
-
 
         char val[4];
         sprintf(val, "%d", -1);
@@ -194,42 +193,27 @@ MIMPI_Retcode MIMPI_Barrier() {
         }
         free(in);
 
-        int* group = malloc(sizeof(int) * 2);  // Tablica do synchronizacji grupowej.
-        ASSERT_SYS_OK(chrecv(22, group, sizeof(int) * 2));
-        int mode = group[1];
-        group[1] = 1;  // Tryb oznaczający synchronizajcę na barierze.
-        group[0] = group[0] + 1;
-        int number = group[0];  // Liczba procesów oczekujących na barierze;
-        if (group[0] == size){  // Ostatni proces do zsynchronizowania.
-            group[0] = 0;
-            group[1] = 0;
+        int* group = malloc(sizeof(int));  // Tablica do synchronizacji grupowej.
+        ASSERT_SYS_OK(chrecv(22, group, sizeof(int)));
+        *group = *group + 1;
+        int number = *group;  // Liczba procesów oczekujących na barierze;
+        if (*group == size){  // Ostatni proces do zsynchronizowania.
+            *group = 0;
         }
-        ASSERT_SYS_OK(chsend(23, group, sizeof(int) * 2));
+        ASSERT_SYS_OK(chsend(23, group, sizeof(int)));
         free(group);
 
-        if (mode > 1){  // Jeśli procesy synchronizują się na czymś innym, niż bariera.
-            int msg = 3;
-            for (int i = 0; i < size; i++){  // Wszystkie czekające procesy dowiadują się, iż synchronizacja się nie powiodła.
-                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
-            }
-        }
-
-        else if (number == size){  // Synchronizacja powiodła się.
-            int msg = 1;
+        if (number == size){  // Synchronizacja powiodła się.
+            int msg = 0;
             for (int i = 0; i < size; i++){  // Budzenie procesów.
                 ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
             }
         }
-        int got;  // Odczytywana wiadomość.
+        int code = 0;  // Odczytywana wiadomość.
         void* buff = malloc(sizeof(int));
         ASSERT_SYS_OK(chrecv(24 + rank * 2, buff, sizeof(int)));
-        memcpy(&got, buff, sizeof(int));
-        if (got == 1){  // Jeśli wszyscy, na których oczekiwano dotarli.
-            return 0;
-        }
-        else{
-            return 3;
-        }
+        memcpy(&code, buff, sizeof(int));
+        return code;
     }
     return 0;
 }
