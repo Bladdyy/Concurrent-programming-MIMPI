@@ -50,6 +50,8 @@ int main(int argc, char** argv) {
 
     int desc[20];  // Deskyptory, które należy zamknąć po otwarciu potrzebnych.
     int pipefd[2];
+    pipefd[0] = 0;
+    pipefd[1] = 0;
     int index = 0;
 
     while (pipefd[1] < 19){  // Otwieranie niedozwolonych deskryptorów.

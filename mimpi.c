@@ -151,12 +151,24 @@ MIMPI_Retcode MIMPI_Send(
             if (in[destination] == 0) {  // Jeśli procesu już nie ma w bloku MIMPI.
                 return 3;
             }
-            void* msg = malloc(512);  // Wiadomość wysyłana.
-            memcpy(msg, &tag, sizeof(int));  // Dodawanie tagu wiadomości.
-            memcpy(msg + sizeof(int), data, sizeof(*data)); // Dodawanie treści wiadomości.
-            ASSERT_SYS_OK(chsend(dir, msg, count + sizeof(int)));
-            free(msg);
             free(in);
+
+            void* msg = malloc(516);  // Wiadomość wysyłana.
+            memcpy(msg, &tag, sizeof(int));  // Dodawanie tagu wiadomości.
+            memcpy(msg + sizeof(int), data, 512); // Dodawanie treści wiadomości.
+            ASSERT_SYS_OK(chsend(dir, msg, 516));
+            int index = 1;
+            while (count - 512 * (index + 1) > 0){
+                memcpy(msg, data + 512 * index, 512); // Dodawanie dalszej treści wiadomości.
+                ASSERT_SYS_OK(chsend(dir, msg, 512));
+                index++;
+            }
+            int rest = count - 512 * index;
+            if (rest > 0){
+                memcpy(msg, data + count - rest, rest); // Dodawanie dalszej treści wiadomości.
+                ASSERT_SYS_OK(chsend(dir, msg, rest));
+            }
+            free(msg);
             return 0;
         }
     }
@@ -188,13 +200,23 @@ MIMPI_Retcode MIMPI_Recv(
             dir -= 2;
         }
         int newtag;  // Tag odczytywanej wiadomości.
+
         void* buff = malloc(sizeof(int));
         ASSERT_SYS_OK(chrecv(dir, buff, sizeof(int)));
         memcpy(&newtag, buff, sizeof(int));
         if (newtag == -1){  // Jeśli tag wiadomości oznacza wyjście z bloku MIMPI.
             return 3;
         }
-        ASSERT_SYS_OK(chrecv(dir, data, count));
+
+        int index = 0;
+        while (count - 512 * (index + 1) > 0){
+            ASSERT_SYS_OK(chrecv(dir, data + index * 512, 512));
+            index++;
+        }
+        int rest = count - 512 * index;
+        if (rest > 0){
+            ASSERT_SYS_OK(chrecv(dir, data + count - rest, rest));
+        }
         return 0;
     }
     else{
