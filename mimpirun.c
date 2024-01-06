@@ -15,19 +15,19 @@ void close_desc(int num, int size){
     int dir;
     for (int i = 0; i < size; i++){
         if (i != num){
-            dir = 25 + size * 4 + (size - 1) * 2 * i;
+            dir = 23 + size * 4 + (size - 1) * 2 * i;
             // Zamyka wszystkie deskryptory do wpisywania innych procesów.
             for (int j = 0; j < size - 1; j++){
                 ASSERT_ZERO(close(dir + 2 * j));
             }
         }
-        dir = 24 + size * 4 + (size - 1) * 2 * i;
+        dir = 22 + size * 4 + (size - 1) * 2 * i;
         int dodge;  // Deskryptory aktualnego procesu do czytania,
         if (i == num){
             dodge = -5;
         }
         else{
-            dodge = 24 + size * 4 + num * 2 + i * (size - 1) * 2;
+            dodge = 22 + size * 4 + num * 2 + i * (size - 1) * 2;
             if (i < num){
                 dodge -= 2;
             }
@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     }
 
     // Otwieranie dobrych deskryptorów do komunikacji między składowymi MIMPI oraz procesami.
-    for (int i = 0; i < n * (n + 1) + 2; i++) {
+    for (int i = 0; i < n * (n + 1) + 1; i++) {
         ASSERT_ZERO(channel(pipefd));
     }
 
@@ -87,15 +87,11 @@ int main(int argc, char** argv) {
     for (int i = 0; i < n; i++){
         in[i] = 1;
     }
-    in[n] = n;
+    in[n] = n;  // Ile procesów w systemie.
     // Umieszcza tablicę procesów w pierwszym pipie.
     ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (n + 1)));
     free(in);
-    // Umieszcza liczbę określającą ilość procesów w procedurze grupowej w drugim pipie.
-    int* barrier = malloc(sizeof(int));
-    *barrier = 0;
-    ASSERT_SYS_OK(chsend(23, barrier, sizeof(int)));
-    free(barrier);
+
     // Inicjalizacja nowych procesów.
     for (int i = 0; i < n; i++){
         pid_t pid = fork();
@@ -125,7 +121,7 @@ int main(int argc, char** argv) {
     }
 
     // Zamykanie otwartych deskryptorów.
-    for (int i = 0; i < 2 * (n * (n + 1) + 2); i++){
+    for (int i = 0; i < 2 * (n * (n + 1) + 1); i++){
         ASSERT_ZERO(close(i + 20));
     }
 

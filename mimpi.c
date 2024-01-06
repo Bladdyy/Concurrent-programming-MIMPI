@@ -10,7 +10,7 @@
 #include "mimpi.h"
 #include "mimpi_common.h"
 
-
+int bar = 0;
 
 
 void MIMPI_Init(bool enable_deadlock_detection) {
@@ -36,7 +36,6 @@ void MIMPI_Finalize() {
         data[rank] = 0;  // Zaznacza w tablicy, że zakończył swój blok MIMPI.
         data[size] = data[size] - 1; // Zaznacza w tablicy, że proces mniej jest w bloku;
         ASSERT_SYS_OK(chsend(21, data, sizeof(int) * (size + 1)));
-        free(data);
 
         // Wysyła do pozostałych procesów wiadomość, że zakończył swój blok MIMPI.
         for (int i = 0; i < size; i++){
@@ -45,14 +44,14 @@ void MIMPI_Finalize() {
             }
         }
 
-        int dir = 25 + size * 4 + (size - 1) * 2 * rank;
+        int dir = 23 + size * 4 + (size - 1) * 2 * rank;
         for (int i = 0; i < size - 1; i++){  // Zamyka swoje deskryptory do wysyłania.
             ASSERT_ZERO(close(dir + i * 2));
 
         }
         for (int i = 0; i < size; i++){  // Zamyka swoje deskryptory do odczytu.
             if (i != rank){
-                int dir = 24 + size * 4 + rank * 2 + i * (size - 1) * 2;
+                dir = 22 + size * 4 + rank * 2 + i * (size - 1) * 2;
                 // Jeśli rank odbiorcy jest większy od rank nadawcy.
                 if (rank > i) {
                     dir -= 2;
@@ -61,21 +60,13 @@ void MIMPI_Finalize() {
             }
         }
 
-
-        int* group = malloc(sizeof(int));  // Tablica do synchronizacji grupowej.
-        ASSERT_SYS_OK(chrecv(22, group, sizeof(int)));
-        if (*group > 0){  // Jeśli przeprowadzana jest synchronizacja grupowa.
-            int msg = 3;
-            for (int i = 0; i < size; i++){  // Budzenie wszystkich procesów z błędem.
-                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
-            }
+        for (int i = 0; i < size; i++){  // Budzenie wszystkich procesów z błędem.
+            ASSERT_SYS_OK(chsend(23 + 2 * i, &bar, sizeof(int)));
         }
 
-        ASSERT_SYS_OK(chsend(23, group, sizeof(int)));
-        free(group);
-
+        free(data);
         // Closing the rest of descriptors.
-        for (int i = 20; i <= 23 + size * 4; i++){
+        for (int i = 20; i <= 21 + size * 4; i++){
             ASSERT_ZERO(close(i));
         }
 
@@ -133,7 +124,7 @@ MIMPI_Retcode MIMPI_Send(
         return 2;
     } else if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
         // Numer deskryptora, do którego zapisywana będzie wiadomość.
-        int dir = 25 + MIMPI_World_size() * 4 + destination * 2 + MIMPI_World_rank() * (MIMPI_World_size() - 1) * 2;
+        int dir = 23 + MIMPI_World_size() * 4 + destination * 2 + MIMPI_World_rank() * (MIMPI_World_size() - 1) * 2;
         // Jeśli rank odbiorcy jest większy od rank nadawcy.
         if (destination > MIMPI_World_rank()) {
             dir -= 2;
@@ -194,7 +185,7 @@ MIMPI_Retcode MIMPI_Recv(
         // Numer deskryptora, z którego będzie czytana wiadomość.
         int size = MIMPI_World_size();
         int rank = MIMPI_World_rank();
-        int dir = 24 + size * 4 + rank * 2 + source * (size - 1) * 2;
+        int dir = 22 + size * 4 + rank * 2 + source * (size - 1) * 2;
         // Jeśli rank odbiorcy jest większy od rank nadawcy.
         if (source < MIMPI_World_rank()) {
             dir -= 2;
@@ -227,43 +218,53 @@ MIMPI_Retcode MIMPI_Recv(
 MIMPI_Retcode MIMPI_Barrier() {
     char *initalized = getenv("ENTERED");
     if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
+        bar++;
         int size = MIMPI_World_size();
         int rank = MIMPI_World_rank();
-
-        int *in = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
-        ASSERT_SYS_OK(chrecv(20, in, sizeof(int) * (size + 1)));
-        ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (size + 1)));
-        if (in[size] < size){  // Jeśli któryś z procesów już wyszedł z bloku MIMPI.
-            int msg = 3;
-            for (int i = 0; i < size; i++){  // Wszystkie czekające procesy dowiadują się, iż synchronizacja się nie powiodła.
-                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
+        int recv = 22 + 2 * rank;
+        static int msg = -1;
+        int code = bar;  // Odczytywana wiadomość.
+        if ((rank + 1) * 2 <= size){  // Odbiór wiadomości od lewego dziecka.
+            void *buff = malloc(sizeof(int));
+            while (code != -1) {  // Póki wiadomość nie jest od dziecka.
+                if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
+                    return 3;
+                }
+                ASSERT_SYS_OK(chrecv(recv, buff, sizeof(int)));
+                memcpy(&code, buff, sizeof(int));
             }
+            code = bar;
         }
-        free(in);
-
-        int* group = malloc(sizeof(int));  // Ile procesów czeka już na barierze.
-        ASSERT_SYS_OK(chrecv(22, group, sizeof(int)));
-        *group = *group + 1;
-        int number = *group;  // Liczba procesów oczekujących na barierze włącznie z nowym;
-        if (*group == size){  // Ostatni proces do zsynchronizowania.
-            *group = 0;
-        }
-        ASSERT_SYS_OK(chsend(23, group, sizeof(int)));
-        free(group);
-
-        if (number == size){  // Synchronizacja powiodła się.
-            int msg = 0;
-            for (int i = 0; i < size; i++){  // Budzenie procesów.
-                ASSERT_SYS_OK(chsend(25 + 2 * i, &msg, sizeof(int)));
+        if ((rank + 1) * 2 + 1 <= size){  // Odbiór wiadomości od prawego dziecka.
+            void *buff = malloc(sizeof(int));
+            while (code != -1) {  // Póki wiadomość nie jest od dziecka.
+                if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
+                    return 3;
+                }
+                ASSERT_SYS_OK(chrecv(recv, buff, sizeof(int)));
+                memcpy(&code, buff, sizeof(int));
             }
+            code = bar;
         }
-        int code = 0;  // Odczytywana wiadomość.
-        void* buff = malloc(sizeof(int));
-        ASSERT_SYS_OK(chrecv(24 + rank * 2, buff, sizeof(int)));
-        memcpy(&code, buff, sizeof(int));
-        printf("%d  MA COOOOOOOOOOOOOOODE: %d\n", rank, code);
-
-        return code;
+        if (rank > 0){  // Wysyłka i odbiór wiadomości od ojca.
+            chsend(((rank - 1) / 2) * 2 + 23, &msg, sizeof(int));
+            void *buff = malloc(sizeof(int));
+            while (code != -1) {  // Póki wiadomość nie jest od dziecka.
+                if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
+                    return 3;
+                }
+                ASSERT_SYS_OK(chrecv(recv, buff, sizeof(int)));
+                memcpy(&code, buff, sizeof(int));
+            }
+            code = bar;
+        }
+        if ((rank + 1) * 2 <= size){  // Wysyłka wiadomości do lewego dziecka.
+            chsend((rank * 2 + 1) * 2 + 23, &msg, sizeof(int));
+        }
+        if ((rank + 1) * 2 + 1 <= size){  // Wysyłka wiadomości do prawego dziecka.
+            chsend(((rank + 1) * 2) * 2 + 23, &msg, sizeof(int));
+        }
+        return 0;
     }
     return -5;  // Proces nie jest w bloku MIMPI.
 }
