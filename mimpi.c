@@ -10,21 +10,112 @@
 #include "mimpi.h"
 #include "mimpi_common.h"
 
+struct Header{
+    int count;
+    int tag;
+    struct Header* next;
+    struct Header* prev;
+    void* text;
+};
+typedef struct Header Header;
+
+Header* roots[16];
+Header* last[16];
 int bar = 0;
 
 
+// Tworzy nowy header.
+Header* createHeader(int tag, int size, int source){
+    Header *newHeader = malloc(sizeof(Header));  // Tworzy header do przechowywania wiadomości.
+    newHeader->tag = tag;
+    newHeader->count = size;
+    newHeader->next = NULL;
+    newHeader->prev = NULL;
+    newHeader->text = malloc(size);
+    if (roots[source] == NULL) {  // Jeśli nie jeszcze zapisanej wiadomości od tego źródła.
+        roots[source] = newHeader;
+        last[source] = newHeader;
+    } else {
+        last[source]->next = newHeader;
+        newHeader->prev = last[source];
+        last[source] = newHeader;
+    }
+    return newHeader;
+}
+
+// Szuka wiadomości o podanych wymaganiach.
+Header* findtext(int source, int tag, int count){
+    Header* temp = roots[source];
+    while (temp != NULL && (tag != temp->tag || count != temp->count)) {
+        temp = temp->next;
+    }
+    return temp;
+}
+
+// Uwalnia pamięc po headerze i usuwa go ze struktury danych.
+void clearHeader(Header* header, int source){
+    if (header->prev != NULL){
+        (header->prev)->next = header->next;
+    }
+    else{
+        roots[source] = header->next;
+    }
+    if (header->next != NULL){
+        (header->next)->prev = header->prev;
+    }
+    else{
+        last[source] = header->prev;
+    }
+    free(header->text);
+    free(header);
+}
+
+// Usuwa wszystkie zapisane wiadomości.
+void delHeaders(){
+    for (int i = 0; i < 16; i++){
+        Header* temp = roots[i];
+        Header* temp2;
+        while (temp != NULL){
+            temp2 = temp;
+            temp = temp2->next;
+            free(temp2->text);
+            free(temp2);
+        }
+    }
+}
 void MIMPI_Init(bool enable_deadlock_detection) {
     channels_init();
     char* initalized = getenv("ENTERED");
     // Sprawdza, czy proces wchodził już do bloku MIMPI.
     if (initalized != NULL && atoi(initalized) == 0) {
+        for (int i = 0; i < 16; i++){
+            roots[i] = NULL;
+            last[i] = NULL;
+        }
         char val[4];
         sprintf(val, "%d", 1);
         setenv("ENTERED", val, 1);  // Udziela pozowolenia na wejście.
     }
 }
 
+// Zamyka deskryptory.
+void closeDesc(int rank, int size){
+    int dir = 23 + size * 4 + (size - 1) * 2 * rank;
+    for (int i = 0; i < size - 1; i++){  // Zamyka swoje deskryptory do wysyłania.
+        ASSERT_ZERO(close(dir + i * 2));
 
+    }
+    for (int i = 0; i < size; i++){  // Zamyka swoje deskryptory do odczytu.
+        if (i != rank){
+            dir = 22 + size * 4 + rank * 2 + i * (size - 1) * 2;
+            // Jeśli rank odbiorcy jest większy od rank nadawcy.
+            if (rank > i) {
+                dir -= 2;
+            }
+            ASSERT_ZERO(close(dir));
+        }
+    }
+}
 void MIMPI_Finalize() {
     char* initalized = getenv("ENTERED");
     // Sprawdza, czy proces jest w bloku MIMPI.
@@ -43,28 +134,13 @@ void MIMPI_Finalize() {
                 MIMPI_Send(NULL, 0, i, -1);
             }
         }
-
-        int dir = 23 + size * 4 + (size - 1) * 2 * rank;
-        for (int i = 0; i < size - 1; i++){  // Zamyka swoje deskryptory do wysyłania.
-            ASSERT_ZERO(close(dir + i * 2));
-
-        }
-        for (int i = 0; i < size; i++){  // Zamyka swoje deskryptory do odczytu.
-            if (i != rank){
-                dir = 22 + size * 4 + rank * 2 + i * (size - 1) * 2;
-                // Jeśli rank odbiorcy jest większy od rank nadawcy.
-                if (rank > i) {
-                    dir -= 2;
-                }
-                ASSERT_ZERO(close(dir));
-            }
-        }
-
+        closeDesc(rank, size);
+        delHeaders();
         for (int i = 0; i < size; i++){  // Budzenie wszystkich procesów z błędem.
             ASSERT_SYS_OK(chsend(23 + 2 * i, &bar, sizeof(int)));
         }
-
         free(data);
+
         // Closing the rest of descriptors.
         for (int i = 20; i <= 21 + size * 4; i++){
             ASSERT_ZERO(close(i));
@@ -73,7 +149,6 @@ void MIMPI_Finalize() {
         char val[4];
         sprintf(val, "%d", -1);
         setenv("ENTERED", val, 1);  // Odbiera dostęp do funkcji MIMPI.
-
         channels_finalize();
     }
 }
@@ -129,12 +204,14 @@ MIMPI_Retcode MIMPI_Send(
         if (destination > MIMPI_World_rank()) {
             dir -= 2;
         }
+
         if (tag == -1){  // Wiadomość wysyłana dotyczy zakończenia bloku MIMPI.
             int x = -1;
             ASSERT_SYS_OK(chsend(dir, &x, sizeof(int)));
             return 0;
         }
-        else{
+        else{  // Wysyła zwykłą wiadomość.
+
             int size = MIMPI_World_size();
             int *in = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
             ASSERT_SYS_OK(chrecv(20, in, sizeof(int) * (size + 1)));
@@ -144,10 +221,17 @@ MIMPI_Retcode MIMPI_Send(
             }
             free(in);
 
-            void* msg = malloc(516);  // Wiadomość wysyłana.
+            void* msg = malloc(520);  // Wiadomość wysyłana.
             memcpy(msg, &tag, sizeof(int));  // Dodawanie tagu wiadomości.
-            memcpy(msg + sizeof(int), data, 512); // Dodawanie treści wiadomości.
-            ASSERT_SYS_OK(chsend(dir, msg, 516));
+            memcpy(msg + sizeof(int), &count, sizeof(int)); // Dodawanie wielkości wiadomości.
+            if (count < 512){
+                memcpy(msg + 2 * sizeof(int), data, count); // Dodawanie treści wiadomości.
+                ASSERT_SYS_OK(chsend(dir, msg, sizeof(int) * 2 + count));
+            }
+            else{
+                memcpy(msg + 2 * sizeof(int), data, 512);
+                ASSERT_SYS_OK(chsend(dir, msg, 520));
+            }
             int index = 1;
             while (count - 512 * (index + 1) > 0){
                 memcpy(msg, data + 512 * index, 512); // Dodawanie dalszej treści wiadomości.
@@ -167,6 +251,8 @@ MIMPI_Retcode MIMPI_Send(
         return -5;
     }
 }
+
+
 
 MIMPI_Retcode MIMPI_Recv(
     void *data,
@@ -190,23 +276,49 @@ MIMPI_Retcode MIMPI_Recv(
         if (source < MIMPI_World_rank()) {
             dir -= 2;
         }
-        int newtag;  // Tag odczytywanej wiadomości.
-
-        void* buff = malloc(sizeof(int));
-        ASSERT_SYS_OK(chrecv(dir, buff, sizeof(int)));
-        memcpy(&newtag, buff, sizeof(int));
-        if (newtag == -1){  // Jeśli tag wiadomości oznacza wyjście z bloku MIMPI.
-            return 3;
+        Header* found = findtext(source, tag, count);  // Znajduje pierwszą wiadomość o danym tagu i rozmiarze.
+        if (found != NULL){  // Jeśli znalazł wiadomość spełniającą wymagania.
+            memcpy(data, found->text, count);
+            clearHeader(found, source);  // Usuwa header.
         }
+        else {  // Nie ma wiadomości spełniającej wymagania.
+            bool exit = false;
+            int loop = -1;
+            while (!exit) {  // Odbiera wiadomości, póki nie otrzyma spełniającej wymagania.
+                loop++;
+                int newtag;  // Tag odczytywanej wiadomości.
+                int msgsize;  // Wielkość odczytywanej wiadomości.
+                void *buff = malloc(sizeof(int));
+                ASSERT_SYS_OK(chrecv(dir, buff, sizeof(int)));  // Czytanie tagu nowej wiadomości.
+                memcpy(&newtag, buff, sizeof(int));
 
-        int index = 0;
-        while (count - 512 * (index + 1) > 0){
-            ASSERT_SYS_OK(chrecv(dir, data + index * 512, 512));
-            index++;
-        }
-        int rest = count - 512 * index;
-        if (rest > 0){
-            ASSERT_SYS_OK(chrecv(dir, data + count - rest, rest));
+                if (newtag == -1) {  // Jeśli tag wiadomości oznacza wyjście z bloku MIMPI.
+                    return 3;
+                }
+                ASSERT_SYS_OK(chrecv(dir, buff, sizeof(int)));  // Czytanie rozmiaru nowej wiadomości.
+                memcpy(&msgsize, buff, sizeof(int));
+                void *save;
+                int num;
+                if (tag != newtag || count != msgsize) {  // Jeśli rozmiar lub tag nie pasują do wymaganych.
+                    Header* newHeader = createHeader(newtag, msgsize, source);  // Tworzy nowy header.
+                    save = newHeader->text;
+                    num = msgsize;
+                } else {
+                    save = data;
+                    num = count;
+                    exit = true;
+                }
+
+                int index = 0;
+                while (num - 512 * (index + 1) > 0) {
+                    ASSERT_SYS_OK(chrecv(dir, save + 512 * index, 512));
+                    index++;
+                }
+                int rest = num - 512 * index;
+                if (rest > 0) {
+                    ASSERT_SYS_OK(chrecv(dir, save + num - rest, rest));
+                }
+            }
         }
         return 0;
     }
