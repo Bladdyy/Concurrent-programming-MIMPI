@@ -106,12 +106,7 @@ int main(int argc, char** argv) {
             sprintf(val, "%d", 0);
             // Zmienna środowiskowa informująca o tym, czy proces jest w bloku MIMPI.
             ASSERT_ZERO(setenv("ENTERED",val, 0));
-            char* args[argc - 1]; // Argumenty procesów odpalanych.
-            for (int x = 0; x < argc - 2; x++){
-                args[x] = argv[x + 2];
-            }
-            args[argc - 2] = NULL;
-            ASSERT_SYS_OK(execv(argv[2], args)); // Odpalanie nowego procesu.
+            ASSERT_SYS_OK(execvp(argv[2], &argv[2])); // Odpalanie nowego procesu.
         }
     }
 
