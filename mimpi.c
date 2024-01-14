@@ -83,20 +83,6 @@ void delHeaders(){
         }
     }
 }
-void MIMPI_Init(bool enable_deadlock_detection) {
-    channels_init();
-    char* initalized = getenv("ENTERED");
-    // Sprawdza, czy proces wchodził już do bloku MIMPI.
-    if (initalized != NULL && atoi(initalized) == 0) {
-        for (int i = 0; i < 16; i++){
-            roots[i] = NULL;
-            last[i] = NULL;
-        }
-        char val[4];
-        sprintf(val, "%d", 1);
-        setenv("ENTERED", val, 1);  // Udziela pozowolenia na wejście.
-    }
-}
 
 // Zamyka deskryptory.
 void closeDesc(int rank, int size){
@@ -116,17 +102,49 @@ void closeDesc(int rank, int size){
         }
     }
 }
+
+
+// Funkcje MIMPI poniżej.
+
+void MIMPI_Init(bool enable_deadlock_detection) {
+    channels_init();
+    char* initalized = getenv("ENTERED");
+    // Sprawdza, czy proces wchodził już do bloku MIMPI.
+    if (initalized != NULL && atoi(initalized) == 0) {
+        for (int i = 0; i < 16; i++){
+            roots[i] = NULL;
+            last[i] = NULL;
+        }
+        char val[4];
+        sprintf(val, "%d", 1);
+        setenv("ENTERED", val, 1);  // Udziela pozowolenia na wejście.
+    }
+}
+
+
 void MIMPI_Finalize() {
     char* initalized = getenv("ENTERED");
+    int delivered = 0;
+    int code;
     // Sprawdza, czy proces jest w bloku MIMPI.
     if (initalized != NULL && atoi(initalized) == 1) {
         int rank = MIMPI_World_rank();
         int size = MIMPI_World_size();
         int *data = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
-        ASSERT_SYS_OK(chrecv(20, data, sizeof(int) * (size + 1)));
+        while (delivered < sizeof(int) * (size + 1)) {
+            code = chrecv(20, data + delivered, sizeof(int) * (size + 1) - delivered);
+            ASSERT_SYS_OK(code);
+            delivered += code;
+        }
         data[rank] = 0;  // Zaznacza w tablicy, że zakończył swój blok MIMPI.
         data[size] = data[size] - 1; // Zaznacza w tablicy, że proces mniej jest w bloku;
-        ASSERT_SYS_OK(chsend(21, data, sizeof(int) * (size + 1)));
+
+        delivered = 0;
+        while (delivered < sizeof(int) * (size + 1)) {
+            code = chsend(21, data + delivered, sizeof(int) * (size + 1) - delivered);
+            ASSERT_SYS_OK(code);
+            delivered += code;
+        }
 
         // Wysyła do pozostałych procesów wiadomość, że zakończył swój blok MIMPI.
         for (int i = 0; i < size; i++){
@@ -137,7 +155,13 @@ void MIMPI_Finalize() {
         closeDesc(rank, size);
         delHeaders();
         for (int i = 0; i < size; i++){  // Budzenie wszystkich procesów z błędem.
-            ASSERT_SYS_OK(chsend(23 + 2 * i, &bar, sizeof(int)));
+            delivered = 0;
+            while (delivered < sizeof(int)) {
+                code = chsend(23 + 2 * i, &bar + delivered, sizeof(int) - delivered);
+                ASSERT_SYS_OK(code);
+                delivered += code;
+            }
+
         }
         free(data);
 
@@ -193,6 +217,8 @@ MIMPI_Retcode MIMPI_Send(
     int tag
 ) {
     char *initalized = getenv("ENTERED");
+    int delivered;
+    int code;
     if (destination == MIMPI_World_rank()) {  // Sprawdza, czy proces nie próbuje wysłać wiadomości do siebie.
         return 1;
     } else if (destination >= MIMPI_World_size()) {  // Sprawdza, czy proces nie próbuje wysłać wiadomości do nieistniejącego procesu.
@@ -207,42 +233,81 @@ MIMPI_Retcode MIMPI_Send(
 
         if (tag == -1){  // Wiadomość wysyłana dotyczy zakończenia bloku MIMPI.
             int x = -1;
-            ASSERT_SYS_OK(chsend(dir, &x, sizeof(int)));
+            delivered = 0;
+            while (delivered < sizeof(int)) {
+                code = chsend(dir, &x + delivered, sizeof(int) - delivered);
+                ASSERT_SYS_OK(code);
+                delivered += code;
+            }
             return 0;
         }
         else{  // Wysyła zwykłą wiadomość.
 
             int size = MIMPI_World_size();
             int *in = malloc(sizeof(int) * (size + 1));  // Tablica procesów w bloku MIMPI.
-            ASSERT_SYS_OK(chrecv(20, in, sizeof(int) * (size + 1)));
-            ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (size + 1)));
+            delivered = 0;
+            while (delivered < sizeof(int) * (size + 1)) {
+                code = chrecv(20, in + delivered, sizeof(int) * (size + 1) - delivered);
+                ASSERT_SYS_OK(code);
+                delivered += code;
+            }
+
+            delivered = 0;
+            while (delivered < sizeof(int) * (size + 1)) {
+                code = chsend(21, in + delivered, sizeof(int) * (size + 1) - delivered);
+                ASSERT_SYS_OK(code);
+                delivered += code;
+            }
+
             if (in[destination] == 0) {  // Jeśli procesu już nie ma w bloku MIMPI.
                 return 3;
             }
             free(in);
-
             void* msg = malloc(520);  // Wiadomość wysyłana.
             memcpy(msg, &tag, sizeof(int));  // Dodawanie tagu wiadomości.
             memcpy(msg + sizeof(int), &count, sizeof(int)); // Dodawanie wielkości wiadomości.
+
+
             if (count < 512){
                 memcpy(msg + 2 * sizeof(int), data, count); // Dodawanie treści wiadomości.
-                ASSERT_SYS_OK(chsend(dir, msg, sizeof(int) * 2 + count));
+                delivered = 0;
+                while (delivered < sizeof(int) * 2 + count) {
+                    code = chsend(dir, msg + delivered, sizeof(int) * 2 + count - delivered);
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
             }
             else{
                 memcpy(msg + 2 * sizeof(int), data, 512);
-                ASSERT_SYS_OK(chsend(dir, msg, 520));
+                delivered = 0;
+                while (delivered < 512 + sizeof(int) * 2) {
+                    code = chsend(dir, msg + delivered, 512 + sizeof(int) * 2 - delivered);
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
             }
             int index = 1;
             while (count - 512 * (index + 1) > 0){
                 memcpy(msg, data + 512 * index, 512); // Dodawanie dalszej treści wiadomości.
-                ASSERT_SYS_OK(chsend(dir, msg, 512));
+                delivered = 0;
+                while (delivered < 512) {
+                    code = chsend(dir, msg + delivered, 512 - delivered);
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
                 index++;
             }
             int rest = count - 512 * index;
             if (rest > 0){
                 memcpy(msg, data + count - rest, rest); // Dodawanie dalszej treści wiadomości.
-                ASSERT_SYS_OK(chsend(dir, msg, rest));
+                delivered = 0;
+                while (delivered < rest) {
+                    code = chsend(dir, msg + delivered, rest - delivered);
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
             }
+
             free(msg);
             return 0;
         }
@@ -284,18 +349,34 @@ MIMPI_Retcode MIMPI_Recv(
         else {  // Nie ma wiadomości spełniającej wymagania.
             bool exit = false;
             int loop = -1;
+            int delivered;
+            int code;
             while (!exit) {  // Odbiera wiadomości, póki nie otrzyma spełniającej wymagania.
                 loop++;
                 int newtag;  // Tag odczytywanej wiadomości.
                 int msgsize;  // Wielkość odczytywanej wiadomości.
                 void *buff = malloc(sizeof(int));
-                ASSERT_SYS_OK(chrecv(dir, buff, sizeof(int)));  // Czytanie tagu nowej wiadomości.
+
+                delivered = 0;
+                while (delivered < sizeof(int)) {
+                    code = chrecv(dir, buff + delivered, sizeof(int) - delivered);  // Czytanie tagu nowej wiadomości.
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
+
                 memcpy(&newtag, buff, sizeof(int));
 
                 if (newtag == -1) {  // Jeśli tag wiadomości oznacza wyjście z bloku MIMPI.
                     return 3;
                 }
-                ASSERT_SYS_OK(chrecv(dir, buff, sizeof(int)));  // Czytanie rozmiaru nowej wiadomości.
+
+                delivered = 0;
+                while (delivered < sizeof(int)) {
+                    code = chrecv(dir, buff + delivered, sizeof(int) - delivered);  // Czytanie rozmiaru nowej wiadomości.
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
+
                 memcpy(&msgsize, buff, sizeof(int));
                 void *save;
                 int num;
@@ -311,12 +392,22 @@ MIMPI_Retcode MIMPI_Recv(
 
                 int index = 0;
                 while (num - 512 * (index + 1) > 0) {
-                    ASSERT_SYS_OK(chrecv(dir, save + 512 * index, 512));
+                    delivered = 0;
+                    while (delivered < 512) {
+                        code = chrecv(dir, save + 512 * index + delivered, 512 - delivered);
+                        ASSERT_SYS_OK(code);
+                        delivered += code;
+                    }
                     index++;
                 }
                 int rest = num - 512 * index;
                 if (rest > 0) {
-                    ASSERT_SYS_OK(chrecv(dir, save + num - rest, rest));
+                    delivered = 0;
+                    while (delivered < rest) {
+                        code = chrecv(dir, save + num - rest + delivered, rest - delivered);
+                        ASSERT_SYS_OK(code);
+                        delivered += code;
+                    }
                 }
             }
         }
@@ -331,6 +422,8 @@ MIMPI_Retcode MIMPI_Barrier() {
     char *initalized = getenv("ENTERED");
     if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
         bar++;
+        int delivered;
+        int codes;
         int size = MIMPI_World_size();
         int rank = MIMPI_World_rank();
         int recv = 22 + 2 * rank;
@@ -342,7 +435,12 @@ MIMPI_Retcode MIMPI_Barrier() {
                 if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
                     return 3;
                 }
-                ASSERT_SYS_OK(chrecv(recv, buff, sizeof(int)));
+                delivered = 0;
+                while (delivered < sizeof(int)) {
+                    code = chrecv(recv, buff + delivered, sizeof(int) - delivered);
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
                 memcpy(&code, buff, sizeof(int));
             }
             code = bar;
@@ -353,28 +451,56 @@ MIMPI_Retcode MIMPI_Barrier() {
                 if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
                     return 3;
                 }
-                ASSERT_SYS_OK(chrecv(recv, buff, sizeof(int)));
+                delivered = 0;
+                while (delivered < sizeof(int)) {
+                    code = chrecv(recv, buff + delivered, sizeof(int) - delivered);
+                    ASSERT_SYS_OK(code);
+                    delivered += code;
+                }
                 memcpy(&code, buff, sizeof(int));
             }
             code = bar;
         }
         if (rank > 0){  // Wysyłka i odbiór wiadomości od ojca.
-            chsend(((rank - 1) / 2) * 2 + 23, &msg, sizeof(int));
+            delivered = 0;
+            while (delivered < sizeof(int)) {
+                codes = chsend(((rank - 1) / 2) * 2 + 23, &msg + delivered, sizeof(int) - delivered);
+                ASSERT_SYS_OK(codes);
+                delivered += codes;
+            }
             void *buff = malloc(sizeof(int));
             while (code != -1) {  // Póki wiadomość nie jest od dziecka.
                 if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
                     return 3;
                 }
-                ASSERT_SYS_OK(chrecv(recv, buff, sizeof(int)));
+
+                delivered = 0;
+                while (delivered < sizeof(int)) {
+                    codes = chrecv(recv, buff + delivered, sizeof(int) - delivered);
+                    ASSERT_SYS_OK(codes);
+                    delivered += codes;
+                }
                 memcpy(&code, buff, sizeof(int));
             }
             code = bar;
         }
         if ((rank + 1) * 2 <= size){  // Wysyłka wiadomości do lewego dziecka.
-            chsend((rank * 2 + 1) * 2 + 23, &msg, sizeof(int));
+            delivered = 0;
+            while (delivered < sizeof(int)) {
+                codes = chsend((rank * 2 + 1) * 2 + 23, &msg + delivered, sizeof(int) - delivered);
+                ASSERT_SYS_OK(codes);
+                delivered += codes;
+            }
+
         }
         if ((rank + 1) * 2 + 1 <= size){  // Wysyłka wiadomości do prawego dziecka.
-            chsend(((rank + 1) * 2) * 2 + 23, &msg, sizeof(int));
+            delivered = 0;
+            while (delivered < sizeof(int)) {
+                codes = chsend(((rank + 1) * 2) * 2 + 23, &msg + delivered, sizeof(int) - delivered);;
+                ASSERT_SYS_OK(codes);
+                delivered += codes;
+            }
+
         }
         return 0;
     }
@@ -386,26 +512,7 @@ MIMPI_Retcode MIMPI_Bcast(
     int count,
     int root
 ) {
-    int code = MIMPI_Barrier();
-    if (code == 0){
-        int rank = MIMPI_World_rank();
-        int size = MIMPI_World_size();
-        if (root == rank){
-            for (int i = 0; i < size; i++){
-                if (i != rank){
-                    ASSERT_SYS_OK(chsend(25 + 2 * i, data, count));
-                }
-            }
-        }
-        else{
-            ASSERT_SYS_OK(chrecv(24 + rank * 2, data, count));
-        }
-        return 0;
-    }
-    else{
-        printf("TEN BALDA %d\n", MIMPI_World_rank());
-        return 3;
-    }
+    TODO
 }
 
 MIMPI_Retcode MIMPI_Reduce(

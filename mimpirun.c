@@ -39,14 +39,10 @@ void close_desc(int num, int size){
         }
     }
 }
-int main(int argc, char** argv) {
-    if (argc < 3){  // Program dostał mniej, niż 2 argumenty.
-        return -1;
-    }
-    int n = atoi(argv[1]);  // Ilość procesów do odpalenia.
 
-    // Zmienna środowiskowa z ilością procesów odpalonych.
-    ASSERT_ZERO(setenv("WORLD_SIZE",argv[1], 0));
+
+// Otwiera potrzebne deskryptory;
+void open_desc(int n){
 
     int desc[20];  // Deskyptory, które należy zamknąć po otwarciu potrzebnych.
     int pipefd[2];
@@ -81,6 +77,17 @@ int main(int argc, char** argv) {
     for (int i = 0; i < index; i++){
         ASSERT_ZERO(close(desc[i]));
     }
+}
+int main(int argc, char** argv) {
+    if (argc < 3){  // Program dostał mniej, niż 2 argumenty.
+        return -1;
+    }
+    int n = atoi(argv[1]);  // Ilość procesów do odpalenia.
+
+    // Zmienna środowiskowa z ilością procesów odpalonych.
+    ASSERT_ZERO(setenv("WORLD_SIZE",argv[1], 0));
+
+    open_desc(n);
 
     // Tablica procesów, które wyszły z MIMPI.
     int* in = malloc(sizeof(int) * (n + 1));
@@ -89,7 +96,13 @@ int main(int argc, char** argv) {
     }
     in[n] = n;  // Ile procesów w systemie.
     // Umieszcza tablicę procesów w pierwszym pipie.
-    ASSERT_SYS_OK(chsend(21, in, sizeof(int) * (n + 1)));
+    int delivered = 0;
+    int code;
+    while(delivered < sizeof(int) * (n + 1)) {
+        code = chsend(21, in + delivered, sizeof(int) * (n + 1) - delivered);
+        ASSERT_SYS_OK(code);
+        delivered += code;
+    }
     free(in);
 
     // Inicjalizacja nowych procesów.
