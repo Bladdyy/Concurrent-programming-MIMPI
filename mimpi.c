@@ -382,7 +382,7 @@ MIMPI_Retcode MIMPI_Recv(
                     delivered += code;
                 }
                 memcpy(&msgsize, buff, sizeof(int));
-
+                free(buff);
                 void *save;
                 int num;
                 if (tag != newtag || count != msgsize) {  // Jeśli rozmiar lub tag nie pasują do wymaganych.
@@ -449,6 +449,7 @@ MIMPI_Retcode MIMPI_Barrier() {
                 memcpy(&code, buff, sizeof(int));
             }
             code = bar;
+            free(buff);
         }
 
         if ((rank + 1) * 2 + 1 <= size){  // Odbiór wiadomości od prawego dziecka.
@@ -466,6 +467,7 @@ MIMPI_Retcode MIMPI_Barrier() {
                 memcpy(&code, buff, sizeof(int));
             }
             code = bar;
+            free(buff);
         }
 
         if (rank > 0){  // Wysyłka i odbiór wiadomości od ojca.
@@ -490,6 +492,7 @@ MIMPI_Retcode MIMPI_Barrier() {
                 memcpy(&code, buff, sizeof(int));
             }
             code = bar;
+            free(buff);
         }
 
         if ((rank + 1) * 2 <= size){  // Wysyłka wiadomości do lewego dziecka.
