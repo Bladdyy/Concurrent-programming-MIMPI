@@ -122,15 +122,13 @@ int main(int argc, char** argv) {
             ASSERT_SYS_OK(execvp(argv[2], &argv[2])); // Odpalanie nowego procesu.
         }
     }
-
-    // Oczekiwanie na zakończenie wszystkich procesów potomnych.
-    for (int i = 0; i < n; i++) {
-        ASSERT_SYS_OK(wait(NULL));
-    }
-
     // Zamykanie otwartych deskryptorów.
     for (int i = 0; i < 2 * (n * (n + 1) + 1); i++){
         ASSERT_ZERO(close(i + 20));
+    }
+    // Oczekiwanie na zakończenie wszystkich procesów potomnych.
+    for (int i = 0; i < n; i++) {
+        ASSERT_SYS_OK(wait(NULL));
     }
 
 }

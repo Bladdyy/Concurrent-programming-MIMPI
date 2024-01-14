@@ -9,6 +9,7 @@
 #include "channel.h"
 #include "mimpi.h"
 #include "mimpi_common.h"
+#include <errno.h>
 
 struct Header{
     int count;
@@ -141,6 +142,13 @@ void MIMPI_Finalize() {
         data[rank] = 0;  // Zaznacza w tablicy, że zakończył swój blok MIMPI.
         data[size] = data[size] - 1; // Zaznacza w tablicy, że proces mniej jest w bloku;
 
+        // Wysyła do pozostałych procesów wiadomość, że zakończył swój blok MIMPI.
+        for (int i = 0; i < size; i++){
+            if (data[i] == 1) {
+                MIMPI_Send(NULL, 0, i, -1);
+            }
+        }
+
         delivered = 0;
         while (delivered < sizeof(int) * (size + 1)) {
             code = chsend(21, data + delivered, sizeof(int) * (size + 1) - delivered);
@@ -148,12 +156,6 @@ void MIMPI_Finalize() {
             delivered += code;
         }
 
-        // Wysyła do pozostałych procesów wiadomość, że zakończył swój blok MIMPI.
-        for (int i = 0; i < size; i++){
-            if (i != rank) {
-                MIMPI_Send(NULL, 0, i, -1);
-            }
-        }
         closeDesc(rank, size);
         delHeaders();
 
@@ -165,6 +167,7 @@ void MIMPI_Finalize() {
                 delivered += code;
             }
         }
+
         free(data);
 
         // Closing the rest of descriptors.
@@ -213,10 +216,10 @@ int MIMPI_World_rank() {
 }
 
 MIMPI_Retcode MIMPI_Send(
-    void const *data,
-    int count,
-    int destination,
-    int tag
+        void const *data,
+        int count,
+        int destination,
+        int tag
 ) {
     char *initalized = getenv("ENTERED");
     int delivered;
@@ -238,6 +241,9 @@ MIMPI_Retcode MIMPI_Send(
             delivered = 0;
             while (delivered < sizeof(int)) {
                 code = chsend(dir, &x + delivered, sizeof(int) - delivered);
+                if (errno == 32){
+                    return 3;
+                }
                 ASSERT_SYS_OK(code);
                 delivered += code;
             }
@@ -253,7 +259,6 @@ MIMPI_Retcode MIMPI_Send(
                 ASSERT_SYS_OK(code);
                 delivered += code;
             }
-
             delivered = 0;
             while (delivered < sizeof(int) * (size + 1)) {
                 code = chsend(21, in + delivered, sizeof(int) * (size + 1) - delivered);
@@ -269,12 +274,14 @@ MIMPI_Retcode MIMPI_Send(
             memcpy(msg, &tag, sizeof(int));  // Dodawanie tagu wiadomości.
             memcpy(msg + sizeof(int), &count, sizeof(int)); // Dodawanie wielkości wiadomości.
 
-
             if (count < 512){ // Dodawanie początku treści wiadomości.
                 memcpy(msg + 2 * sizeof(int), data, count);
                 delivered = 0;
                 while (delivered < sizeof(int) * 2 + count) {
                     code = chsend(dir, msg + delivered, sizeof(int) * 2 + count - delivered);
+                    if (errno == 32){
+                        return 3;
+                    }
                     ASSERT_SYS_OK(code);
                     delivered += code;
                 }
@@ -284,6 +291,9 @@ MIMPI_Retcode MIMPI_Send(
                 delivered = 0;
                 while (delivered < 512 + sizeof(int) * 2) {
                     code = chsend(dir, msg + delivered, 512 + sizeof(int) * 2 - delivered);
+                    if (errno == 32){
+                        return 3;
+                    }
                     ASSERT_SYS_OK(code);
                     delivered += code;
                 }
@@ -295,6 +305,9 @@ MIMPI_Retcode MIMPI_Send(
                 delivered = 0;
                 while (delivered < 512) {
                     code = chsend(dir, msg + delivered, 512 - delivered);
+                    if (errno == 32){
+                        return 3;
+                    }
                     ASSERT_SYS_OK(code);
                     delivered += code;
                 }
@@ -306,6 +319,9 @@ MIMPI_Retcode MIMPI_Send(
                 delivered = 0;
                 while (delivered < rest) {
                     code = chsend(dir, msg + delivered, rest - delivered);
+                    if (errno == 32){
+                        return 3;
+                    }
                     ASSERT_SYS_OK(code);
                     delivered += code;
                 }
@@ -322,10 +338,10 @@ MIMPI_Retcode MIMPI_Send(
 
 
 MIMPI_Retcode MIMPI_Recv(
-    void *data,
-    int count,
-    int source,
-    int tag
+        void *data,
+        int count,
+        int source,
+        int tag
 ) {
     char* initalized = getenv("ENTERED");
     if (source == MIMPI_World_rank()){  // Sprawdza, czy proces nie próbuje odczytać wiadomości do siebie.
@@ -354,11 +370,9 @@ MIMPI_Retcode MIMPI_Recv(
                 dir -= 2;
             }
             bool exit = false;
-            int loop = -1;
             int delivered;
             int code;
             while (!exit) {  // Odbiera wiadomości, póki nie otrzyma spełniającej wymagania.
-                loop++;
                 int newtag;  // Tag odczytywanej wiadomości.
                 int msgsize;  // Wielkość odczytywanej wiadomości.
                 void *buff = malloc(sizeof(int));
@@ -521,19 +535,178 @@ MIMPI_Retcode MIMPI_Barrier() {
 
 
 MIMPI_Retcode MIMPI_Bcast(
-    void *data,
-    int count,
-    int root
+        void *data,
+        int count,
+        int root
 ) {
-    TODO
+    char* initalized = getenv("ENTERED");
+    if (root >= MIMPI_World_size()){  // Sprawdza, czy proces root istnieje.
+        return MIMPI_ERROR_NO_SUCH_RANK;
+    }
+    else if (initalized != NULL && atoi(initalized) == 1) {
+        int code = MIMPI_Barrier();
+        int rank = MIMPI_World_rank();
+        int size = MIMPI_World_size();
+        if (code != 0){  // Kod bariery.
+            return code;
+        }
+        int delivered;
+        if (rank == root){
+            int index = 0;
+            while (count > 0){  // Wysyła całą wiadomość.
+                for (int i = 0; i < size; i++){  // Wysyła do każdego, oprócz siebie.
+                    if (i != rank) {
+                        delivered = 0;
+                        if (count >= 512) {
+                            while (delivered < 512) {
+                                code = chsend(23 + 2 * size + i * 2, data + 512 * index + delivered, 512 - delivered);
+                                ASSERT_SYS_OK(code);
+                                delivered += code;
+                            }
+                        } else {
+                            while (delivered < count) {
+                                code = chsend(23 + 2 * size + i * 2, data + 512 * index + delivered, count - delivered);
+                                ASSERT_SYS_OK(code);
+                                delivered += code;
+                            }
+                        }
+                    }
+                }
+                count -= 512;
+                index++;
+            }
+        }
+        else{
+            int index = 0;
+            while (count > 0){
+                if (count >= 512){
+                    delivered = 0;
+                    while (delivered < 512) {
+                        code = chrecv(22 + 2 * (size + rank), data + index * 512 + delivered, 512 - delivered);
+                        ASSERT_SYS_OK(code);
+                        delivered += code;
+                    }
+                    count -= 512;
+                }
+                else{
+                    delivered = 0;
+                    while (delivered < count) {
+                        code = chrecv(22 + 2 * (size + rank), data + index * 512 + delivered, count - delivered);
+                        ASSERT_SYS_OK(code);
+                        delivered += code;
+                    }
+                    count = 0;
+                }
+                index++;
+            }
+        }
+        return 0;
+    }
+    else{
+        return -5;
+    }
+}
+void update(MIMPI_Op op, u_int8_t* current, void* recv_data, int position, int count){
+    for (int i = position; i < count + position; i++){
+        u_int8_t val;
+        memcpy(&val, recv_data + sizeof(u_int8_t) * i, sizeof(u_int8_t));
+        if (op == MIMPI_MAX && val < current[i - position]){
+            memcpy(recv_data + sizeof(u_int8_t) * i, &current[i - position], sizeof(u_int8_t));
+        }
+        else if (op == MIMPI_MIN && val > current[i - position]){
+            memcpy(recv_data + sizeof(u_int8_t) * i, &current[i - position], sizeof(u_int8_t));
+        }
+        else if (op == MIMPI_SUM){
+            u_int8_t sum = val + current[i - position];
+            memcpy(recv_data + sizeof(u_int8_t) * i, &sum, sizeof(u_int8_t));
+        }
+        else if (op == MIMPI_PROD){
+            u_int8_t prod = val * current[i - position];
+            memcpy(recv_data + sizeof(u_int8_t) * i, &prod, sizeof(u_int8_t));
+        }
+    }
 }
 
 MIMPI_Retcode MIMPI_Reduce(
-    void const *send_data,
-    void *recv_data,
-    int count,
-    MIMPI_Op op,
-    int root
+        void const *send_data,
+        void *recv_data,
+        int count,
+        MIMPI_Op op,
+        int root
 ) {
-    TODO
+    char* initalized = getenv("ENTERED");
+    if (root >= MIMPI_World_size()){  // Sprawdza, czy proces root istnieje.
+        return MIMPI_ERROR_NO_SUCH_RANK;
+    }
+    else if (initalized != NULL && atoi(initalized) == 1) {
+        int code = MIMPI_Barrier();
+        int rank = MIMPI_World_rank();
+        int size = MIMPI_World_size();
+        if (code != 0) {  // Kod bariery.
+            return code;
+        }
+        int delivered;
+        u_int8_t* current = malloc(sizeof(u_int8_t) * 128);
+        int position = 0;
+        if (root == rank){
+            memcpy(recv_data, send_data, sizeof(u_int8_t) * count);
+            while (count > 0){
+                for (int i = 0; i < size; i++){
+                    if (i != rank){
+                        if (count >= 128){
+                            delivered = 0;
+                            while (delivered < 128 * sizeof(u_int8_t)) {
+                                code = chrecv(22 + 2 * (size + i), current + delivered, 128 * sizeof(u_int8_t) - delivered);
+                                ASSERT_SYS_OK(code);
+                                delivered += code;
+                            }
+                            update(op, current, recv_data, position, 128);
+                        }
+                        else{
+                            delivered = 0;
+                            while (delivered < count * sizeof(u_int8_t)) {
+                                code = chrecv(22 + 2 * (size + i), current + delivered, count * sizeof(u_int8_t) - delivered);
+                                ASSERT_SYS_OK(code);
+                                delivered += code;
+                            }
+                            update(op, current, recv_data, position, count);
+                        }
+                    }
+                }
+                count -= 128;
+                position += 128;
+            }
+        }
+        else {
+            while (count > 0) {
+                if (count >= 128) {
+                    delivered = 0;
+                    while (delivered < 128 * sizeof(u_int8_t)) {
+                        code = chsend(23 + 2 * (size + rank), send_data + position * sizeof(u_int8_t) + delivered,
+                                      128 * sizeof(u_int8_t) - delivered);
+                        ASSERT_SYS_OK(code);
+                        delivered += code;
+                    }
+                } else {
+                    delivered = 0;
+                    while (delivered < count * sizeof(u_int8_t)) {
+                        u_int8_t val;
+                        memcpy(&val, send_data, sizeof(u_int8_t));
+                        code = chsend(23 + 2 * (size + rank), send_data + position * sizeof(u_int8_t) + delivered,
+                                      count * sizeof(u_int8_t) - delivered);
+                        ASSERT_SYS_OK(code);
+                        delivered += code;
+                    }
+
+                }
+                count -= 128;
+                position += 128;
+            }
+        }
+        free(current);
+        return 0;
+    }
+    else{
+        return -5;
+    }
 }
