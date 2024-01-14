@@ -653,21 +653,21 @@ MIMPI_Retcode MIMPI_Reduce(
             return code;
         }
         int delivered;
-        u_int8_t* current = malloc(sizeof(u_int8_t) * 128);
+        u_int8_t* current = malloc(sizeof(u_int8_t) * 512);
         int position = 0;
         if (root == rank){
             memcpy(recv_data, send_data, sizeof(u_int8_t) * count);
             while (count > 0){
                 for (int i = 0; i < size; i++){
                     if (i != rank){
-                        if (count >= 128){
+                        if (count >= 512){
                             delivered = 0;
-                            while (delivered < 128 * sizeof(u_int8_t)) {
-                                code = chrecv(22 + 2 * (size + i), current + delivered, 128 * sizeof(u_int8_t) - delivered);
+                            while (delivered < 512 * sizeof(u_int8_t)) {
+                                code = chrecv(22 + 2 * (size + i), current + delivered, 512 * sizeof(u_int8_t) - delivered);
                                 ASSERT_SYS_OK(code);
                                 delivered += code;
                             }
-                            update(op, current, recv_data, position, 128);
+                            update(op, current, recv_data, position, 512);
                         }
                         else{
                             delivered = 0;
@@ -680,17 +680,17 @@ MIMPI_Retcode MIMPI_Reduce(
                         }
                     }
                 }
-                count -= 128;
-                position += 128;
+                count -= 512;
+                position += 512;
             }
         }
         else {
             while (count > 0) {
-                if (count >= 128) {
+                if (count >= 512) {
                     delivered = 0;
-                    while (delivered < 128 * sizeof(u_int8_t)) {
+                    while (delivered < 512 * sizeof(u_int8_t)) {
                         code = chsend(23 + 2 * (size + rank), send_data + position * sizeof(u_int8_t) + delivered,
-                                      128 * sizeof(u_int8_t) - delivered);
+                                      512 * sizeof(u_int8_t) - delivered);
                         ASSERT_SYS_OK(code);
                         delivered += code;
                     }
@@ -706,8 +706,8 @@ MIMPI_Retcode MIMPI_Reduce(
                     }
 
                 }
-                count -= 128;
-                position += 128;
+                count -= 512;
+                position += 512;
             }
         }
         free(current);
