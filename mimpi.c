@@ -24,6 +24,7 @@ Header* roots[16];
 Header* last[16];
 int bar = 0;
 bool alreadyleft[16];
+bool alreadyleftbar = false;
 
 // Tworzy nowy header.
 Header* createHeader(int tag, int size, int source){
@@ -440,6 +441,9 @@ MIMPI_Retcode MIMPI_Recv(
 MIMPI_Retcode MIMPI_Barrier() {
     char *initalized = getenv("ENTERED");
     if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
+        if (alreadyleftbar){
+            return 3;
+        }
         bar++;
         int delivered;
         int codes;
@@ -452,6 +456,7 @@ MIMPI_Retcode MIMPI_Barrier() {
             void *buff = malloc(sizeof(int));
             while (code != -1) {  // Póki wiadomość nie jest od dziecka.
                 if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
+                    alreadyleftbar = true;
                     return 3;
                 }
                 delivered = 0;
@@ -470,6 +475,7 @@ MIMPI_Retcode MIMPI_Barrier() {
             void *buff = malloc(sizeof(int));
             while (code != -1) {  // Póki wiadomość nie jest od dziecka.
                 if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
+                    alreadyleftbar = true;
                     return 3;
                 }
                 delivered = 0;
@@ -494,6 +500,7 @@ MIMPI_Retcode MIMPI_Barrier() {
             void *buff = malloc(sizeof(int));
             while (code != -1) {  // Póki wiadomość nie jest od dziecka.
                 if (code < bar) {  // Wiadomość nie od dziecka, a od procesu, który nie wszedł do aktualnej bariery.
+                    alreadyleftbar = true;
                     return 3;
                 }
 
