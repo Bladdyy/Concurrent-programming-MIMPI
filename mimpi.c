@@ -22,7 +22,7 @@ typedef struct Header Header;
 Header* roots[16];
 Header* last[16];
 int bar = 0;
-
+bool alreadyleft[16];
 
 // Tworzy nowy header.
 Header* createHeader(int tag, int size, int source){
@@ -114,6 +114,7 @@ void MIMPI_Init(bool enable_deadlock_detection) {
         for (int i = 0; i < 16; i++){
             roots[i] = NULL;
             last[i] = NULL;
+            alreadyleft[i] = false;
         }
         char val[4];
         sprintf(val, "%d", 1);
@@ -136,6 +137,7 @@ void MIMPI_Finalize() {
             ASSERT_SYS_OK(code);
             delivered += code;
         }
+
         data[rank] = 0;  // Zaznacza w tablicy, że zakończył swój blok MIMPI.
         data[size] = data[size] - 1; // Zaznacza w tablicy, że proces mniej jest w bloku;
 
@@ -154,6 +156,7 @@ void MIMPI_Finalize() {
         }
         closeDesc(rank, size);
         delHeaders();
+
         for (int i = 0; i < size; i++){  // Budzenie wszystkich procesów z błędem.
             delivered = 0;
             while (delivered < sizeof(int)) {
@@ -161,7 +164,6 @@ void MIMPI_Finalize() {
                 ASSERT_SYS_OK(code);
                 delivered += code;
             }
-
         }
         free(data);
 
@@ -268,8 +270,8 @@ MIMPI_Retcode MIMPI_Send(
             memcpy(msg + sizeof(int), &count, sizeof(int)); // Dodawanie wielkości wiadomości.
 
 
-            if (count < 512){
-                memcpy(msg + 2 * sizeof(int), data, count); // Dodawanie treści wiadomości.
+            if (count < 512){ // Dodawanie początku treści wiadomości.
+                memcpy(msg + 2 * sizeof(int), data, count);
                 delivered = 0;
                 while (delivered < sizeof(int) * 2 + count) {
                     code = chsend(dir, msg + delivered, sizeof(int) * 2 + count - delivered);
@@ -286,9 +288,10 @@ MIMPI_Retcode MIMPI_Send(
                     delivered += code;
                 }
             }
+
             int index = 1;
-            while (count - 512 * (index + 1) > 0){
-                memcpy(msg, data + 512 * index, 512); // Dodawanie dalszej treści wiadomości.
+            while (count - 512 * (index + 1) > 0){ // Dodawanie dalszej treści wiadomości w częściach o wielkości 512.
+                memcpy(msg, data + 512 * index, 512);
                 delivered = 0;
                 while (delivered < 512) {
                     code = chsend(dir, msg + delivered, 512 - delivered);
@@ -298,8 +301,8 @@ MIMPI_Retcode MIMPI_Send(
                 index++;
             }
             int rest = count - 512 * index;
-            if (rest > 0){
-                memcpy(msg, data + count - rest, rest); // Dodawanie dalszej treści wiadomości.
+            if (rest > 0){ // Dodawanie końcówki treści wiadomości o wielkości mniejszej, niż 512.
+                memcpy(msg, data + count - rest, rest);
                 delivered = 0;
                 while (delivered < rest) {
                     code = chsend(dir, msg + delivered, rest - delivered);
@@ -307,7 +310,6 @@ MIMPI_Retcode MIMPI_Send(
                     delivered += code;
                 }
             }
-
             free(msg);
             return 0;
         }
@@ -332,21 +334,25 @@ MIMPI_Retcode MIMPI_Recv(
     else if (source >= MIMPI_World_size()){  // Sprawdza, czy proces nie próbuje odczytać wiadomości do nieistniejącego procesu.
         return 2;
     }
+    else if (alreadyleft[source]){  // Sprawdza, czy dostał już wiadomość o wyjściu procesu.
+        return 3;
+    }
     else if (initalized != NULL && atoi(initalized) == 1) {  // Sprawdza, czy proces jest w bloku MIMPI.
         // Numer deskryptora, z którego będzie czytana wiadomość.
         int size = MIMPI_World_size();
         int rank = MIMPI_World_rank();
-        int dir = 22 + size * 4 + rank * 2 + source * (size - 1) * 2;
-        // Jeśli rank odbiorcy jest większy od rank nadawcy.
-        if (source < MIMPI_World_rank()) {
-            dir -= 2;
-        }
+
         Header* found = findtext(source, tag, count);  // Znajduje pierwszą wiadomość o danym tagu i rozmiarze.
         if (found != NULL){  // Jeśli znalazł wiadomość spełniającą wymagania.
             memcpy(data, found->text, count);
             clearHeader(found, source);  // Usuwa header.
         }
         else {  // Nie ma wiadomości spełniającej wymagania.
+            int dir = 22 + size * 4 + rank * 2 + source * (size - 1) * 2;
+            // Jeśli rank odbiorcy jest większy od rank nadawcy.
+            if (source < MIMPI_World_rank()) {
+                dir -= 2;
+            }
             bool exit = false;
             int loop = -1;
             int delivered;
@@ -363,10 +369,9 @@ MIMPI_Retcode MIMPI_Recv(
                     ASSERT_SYS_OK(code);
                     delivered += code;
                 }
-
                 memcpy(&newtag, buff, sizeof(int));
-
                 if (newtag == -1) {  // Jeśli tag wiadomości oznacza wyjście z bloku MIMPI.
+                    alreadyleft[source] = true;
                     return 3;
                 }
 
@@ -376,8 +381,8 @@ MIMPI_Retcode MIMPI_Recv(
                     ASSERT_SYS_OK(code);
                     delivered += code;
                 }
-
                 memcpy(&msgsize, buff, sizeof(int));
+
                 void *save;
                 int num;
                 if (tag != newtag || count != msgsize) {  // Jeśli rozmiar lub tag nie pasują do wymaganych.
@@ -445,6 +450,7 @@ MIMPI_Retcode MIMPI_Barrier() {
             }
             code = bar;
         }
+
         if ((rank + 1) * 2 + 1 <= size){  // Odbiór wiadomości od prawego dziecka.
             void *buff = malloc(sizeof(int));
             while (code != -1) {  // Póki wiadomość nie jest od dziecka.
@@ -461,6 +467,7 @@ MIMPI_Retcode MIMPI_Barrier() {
             }
             code = bar;
         }
+
         if (rank > 0){  // Wysyłka i odbiór wiadomości od ojca.
             delivered = 0;
             while (delivered < sizeof(int)) {
@@ -484,6 +491,7 @@ MIMPI_Retcode MIMPI_Barrier() {
             }
             code = bar;
         }
+
         if ((rank + 1) * 2 <= size){  // Wysyłka wiadomości do lewego dziecka.
             delivered = 0;
             while (delivered < sizeof(int)) {
@@ -493,6 +501,7 @@ MIMPI_Retcode MIMPI_Barrier() {
             }
 
         }
+
         if ((rank + 1) * 2 + 1 <= size){  // Wysyłka wiadomości do prawego dziecka.
             delivered = 0;
             while (delivered < sizeof(int)) {
@@ -500,12 +509,13 @@ MIMPI_Retcode MIMPI_Barrier() {
                 ASSERT_SYS_OK(codes);
                 delivered += codes;
             }
-
         }
         return 0;
     }
     return -5;  // Proces nie jest w bloku MIMPI.
 }
+
+
 
 MIMPI_Retcode MIMPI_Bcast(
     void *data,
